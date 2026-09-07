@@ -1,0 +1,19 @@
+# Local reference repositories used for product research.
+/candidate-algora/
+/candidate-bountysource/
+/candidate-freelance/
+/candidate-gitpay/
+/candidate-mergeos/
+/superteam-earn/
+
+# Local and generated files.
+.DS_Store
+.env
+.env.*
+!.env.example
+node_modules/
+.wasp/
+build/
+dist/
+coverage/
+
