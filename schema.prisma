@@ -1,0 +1,426 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum TaskStatus {
+  DRAFT
+  PENDING_PAYMENT
+  PENDING_REVIEW
+  OPEN
+  IN_PROGRESS
+  JUDGING
+  COMPLETED
+  CANCELLED
+  REFUNDED
+  CLOSED
+}
+
+enum ApplicationStatus {
+  PENDING
+  SELECTED
+  REJECTED
+  WITHDRAWN
+}
+
+enum RechargeOrderStatus {
+  CREATED
+  PAID
+  CLOSED
+  REFUNDED
+}
+
+enum EscrowStatus {
+  HELD
+  RELEASED
+  AWARDED
+}
+
+enum AwardStatus {
+  COOLING
+  BLOCKED
+  CREDITED
+}
+
+enum WithdrawalStatus {
+  REQUESTED
+  TOKEN_ISSUED
+  COMPLETED
+  REJECTED
+  CANCELLED
+}
+
+enum ActorSource {
+  USER
+  ADMIN
+  SYSTEM
+}
+
+enum ContestStatus {
+  DRAFT
+  PENDING_PAYMENT
+  OPEN
+  JUDGING
+  COOLING
+  COMPLETED
+  CANCELLED
+  REFUNDED
+  CLOSED
+}
+
+enum PrizeRank {
+  FIRST
+  SECOND
+  THIRD
+}
+
+model User {
+  id                      String              @id @default(uuid())
+  createdAt               DateTime            @default(now())
+  email                   String?             @unique
+  username                String?             @unique
+  isAdmin                 Boolean             @default(false)
+  isBanned                Boolean             @default(false)
+  bannedReason            String?
+  publishedTasks          UserTask[]          @relation("PublishedTasks")
+  applications            Application[]
+  submissions             Submission[]
+  files                   File[]
+  wallet                  WalletAccount?
+  walletEntries           WalletEntry[]
+  rechargeOrders          RechargeOrder[]
+  escrows                 TaskEscrow[]        @relation("EscrowPublisher")
+  awards                  Award[]             @relation("AwardRecipient")
+  withdrawalRequests      WithdrawalRequest[] @relation("WithdrawalOwner")
+  administeredWithdrawals WithdrawalRequest[] @relation("WithdrawalAdmin")
+  feeConfigsUpdated       FeeConfig[]
+  refundsAdministered     RefundRecord[]
+  taskEvents              TaskEvent[]
+  publishedContests       Contest[]           @relation("PublishedContests")
+  contestEntries          ContestEntry[]
+  contestEscrows          ContestEscrow[]      @relation("ContestEscrowPublisher")
+  contestAwards           ContestAward[]       @relation("ContestAwardRecipient")
+}
+
+model Contest {
+  id                 String          @id @default(uuid())
+  publisherId        String
+  title              String
+  description        String
+  totalPrizeCents    Int
+  submissionDeadline DateTime
+  status             ContestStatus   @default(DRAFT)
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+  publisher          User            @relation("PublishedContests", fields: [publisherId], references: [id])
+  prizes             ContestPrize[]
+  entries            ContestEntry[]
+  escrow             ContestEscrow?
+  awards             ContestAward[]
+
+  @@index([status, createdAt])
+  @@index([publisherId, createdAt])
+}
+
+model ContestPrize {
+  id            String        @id @default(uuid())
+  contestId     String
+  rank          PrizeRank
+  amountCents   Int
+  winnerEntryId String?       @unique
+  contest       Contest       @relation(fields: [contestId], references: [id])
+  winner        ContestEntry? @relation("ContestPrizeWinner", fields: [winnerEntryId], references: [id])
+  award         ContestAward?
+
+  @@unique([contestId, rank])
+}
+
+model ContestEntry {
+  id          String        @id @default(uuid())
+  contestId   String
+  entrantId   String
+  content     String
+  submittedAt DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  contest     Contest       @relation(fields: [contestId], references: [id])
+  entrant     User          @relation(fields: [entrantId], references: [id])
+  wonPrize    ContestPrize? @relation("ContestPrizeWinner")
+
+  @@unique([contestId, entrantId])
+  @@index([entrantId, submittedAt])
+}
+
+model ContestEscrow {
+  id            String       @id @default(uuid())
+  contestId     String       @unique
+  publisherId   String
+  rechargeCents Int
+  earningsCents Int
+  totalCents    Int
+  status        EscrowStatus @default(HELD)
+  heldAt        DateTime     @default(now())
+  releasedAt    DateTime?
+  contest       Contest      @relation(fields: [contestId], references: [id])
+  publisher     User         @relation("ContestEscrowPublisher", fields: [publisherId], references: [id])
+}
+
+model ContestAward {
+  id            String      @id @default(uuid())
+  contestId     String
+  prizeId       String      @unique
+  recipientId   String
+  amountCents   Int
+  status        AwardStatus @default(COOLING)
+  availableAt   DateTime
+  blockedReason String?
+  creditedAt    DateTime?
+  contest       Contest     @relation(fields: [contestId], references: [id])
+  prize         ContestPrize @relation(fields: [prizeId], references: [id])
+  recipient     User        @relation("ContestAwardRecipient", fields: [recipientId], references: [id])
+
+  @@index([status, availableAt])
+  @@index([contestId])
+}
+
+model UserTask {
+  id                    String         @id @default(uuid())
+  publisherId           String
+  title                 String
+  description           String
+  budgetCents           Int
+  applicationDeadline   DateTime
+  deliveryDeadline      DateTime
+  status                TaskStatus     @default(DRAFT)
+  selectedApplicationId String?        @unique
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+  publisher             User           @relation("PublishedTasks", fields: [publisherId], references: [id])
+  selectedApplication   Application?   @relation("SelectedApplication", fields: [selectedApplicationId], references: [id])
+  applications          Application[]  @relation("TaskApplications")
+  submission            Submission?
+  escrow                TaskEscrow?
+  award                 Award?
+  events                TaskEvent[]
+  refunds               RefundRecord[]
+
+  @@index([status, createdAt])
+  @@index([publisherId, createdAt])
+}
+
+model Application {
+  id             String            @id @default(uuid())
+  taskId         String
+  applicantId    String
+  message        String
+  status         ApplicationStatus @default(PENDING)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  task           UserTask          @relation("TaskApplications", fields: [taskId], references: [id])
+  selectedByTask UserTask?         @relation("SelectedApplication")
+  applicant      User              @relation(fields: [applicantId], references: [id])
+  submission     Submission?
+
+  @@unique([taskId, applicantId])
+  @@index([applicantId, createdAt])
+}
+
+model Submission {
+  id            String      @id @default(uuid())
+  taskId        String      @unique
+  applicationId String      @unique
+  submitterId   String
+  content       String
+  submittedAt   DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  task          UserTask    @relation(fields: [taskId], references: [id])
+  application   Application @relation(fields: [applicationId], references: [id])
+  submitter     User        @relation(fields: [submitterId], references: [id])
+  files         File[]
+}
+
+model File {
+  id           String      @id @default(uuid())
+  createdAt    DateTime    @default(now())
+  userId       String
+  submissionId String?
+  name         String
+  type         String
+  s3Key        String
+  user         User        @relation(fields: [userId], references: [id])
+  submission   Submission? @relation(fields: [submissionId], references: [id])
+}
+
+model WalletAccount {
+  id                     String   @id @default(uuid())
+  userId                 String   @unique
+  rechargeAvailableCents Int      @default(0)
+  earningsAvailableCents Int      @default(0)
+  withdrawalFrozenCents  Int      @default(0)
+  version                Int      @default(0)
+  updatedAt              DateTime @updatedAt
+  user                   User     @relation(fields: [userId], references: [id])
+}
+
+model WalletEntry {
+  id                 String   @id @default(uuid())
+  userId             String
+  type               String
+  rechargeDeltaCents Int      @default(0)
+  earningsDeltaCents Int      @default(0)
+  frozenDeltaCents   Int      @default(0)
+  referenceType      String
+  referenceId        String
+  idempotencyKey     String   @unique
+  balanceSnapshot    Json
+  createdAt          DateTime @default(now())
+  user               User     @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+}
+
+model RechargeOrder {
+  id                    String                @id @default(uuid())
+  orderNo               String                @unique
+  userId                String
+  creditCents           Int
+  feeCents              Int
+  payableCents          Int
+  feeRateBpsSnapshot    Int
+  fixedFeeCentsSnapshot Int
+  epayTradeNo           String?               @unique
+  status                RechargeOrderStatus   @default(CREATED)
+  paidAt                DateTime?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  user                  User                  @relation(fields: [userId], references: [id])
+  notifications         PaymentNotification[]
+
+  @@index([userId, createdAt])
+}
+
+model PaymentNotification {
+  id               String         @id @default(uuid())
+  orderNo          String
+  epayTradeNo      String?
+  payloadJson      Json
+  payloadHash      String
+  signatureValid   Boolean
+  validationResult String
+  processingResult String
+  receivedAt       DateTime       @default(now())
+  rechargeOrderId  String?
+  order            RechargeOrder? @relation(fields: [rechargeOrderId], references: [id])
+
+  @@index([orderNo, receivedAt])
+}
+
+model TaskEscrow {
+  id            String       @id @default(uuid())
+  taskId        String       @unique
+  publisherId   String
+  rechargeCents Int
+  earningsCents Int
+  totalCents    Int
+  status        EscrowStatus @default(HELD)
+  heldAt        DateTime     @default(now())
+  releasedAt    DateTime?
+  task          UserTask     @relation(fields: [taskId], references: [id])
+  publisher     User         @relation("EscrowPublisher", fields: [publisherId], references: [id])
+}
+
+model Award {
+  id            String      @id @default(uuid())
+  taskId        String      @unique
+  recipientId   String
+  amountCents   Int
+  status        AwardStatus @default(COOLING)
+  availableAt   DateTime
+  blockedReason String?
+  creditedAt    DateTime?
+  task          UserTask    @relation(fields: [taskId], references: [id])
+  recipient     User        @relation("AwardRecipient", fields: [recipientId], references: [id])
+
+  @@index([status, availableAt])
+}
+
+model WithdrawalRequest {
+  id                    String           @id @default(uuid())
+  userId                String
+  amountCents           Int
+  feeCents              Int
+  payoutCents           Int
+  feeRateBpsSnapshot    Int
+  fixedFeeCentsSnapshot Int
+  status                WithdrawalStatus @default(REQUESTED)
+  tokenCiphertext       String?
+  tokenIssuedAt         DateTime?
+  completedAt           DateTime?
+  adminId               String?
+  adminNote             String?
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+  user                  User             @relation("WithdrawalOwner", fields: [userId], references: [id])
+  admin                 User?            @relation("WithdrawalAdmin", fields: [adminId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+}
+
+model FeeConfig {
+  id                   String   @id @default(uuid())
+  rechargeRateBps      Int      @default(0)
+  rechargeFixedCents   Int      @default(0)
+  withdrawalRateBps    Int      @default(0)
+  withdrawalFixedCents Int      @default(0)
+  version              Int      @unique
+  updatedByAdminId     String?
+  updatedAt            DateTime @updatedAt
+  updatedByAdmin       User?    @relation(fields: [updatedByAdminId], references: [id])
+}
+
+model RefundRecord {
+  id                String    @id @default(uuid())
+  taskId            String?
+  recipientUserId   String
+  originalReference String
+  amountCents       Int
+  channel           String
+  externalReference String?
+  reason            String
+  adminId           String
+  createdAt         DateTime  @default(now())
+  task              UserTask? @relation(fields: [taskId], references: [id])
+  admin             User      @relation(fields: [adminId], references: [id])
+}
+
+model TaskEvent {
+  id           String      @id @default(uuid())
+  taskId       String
+  actorId      String?
+  actorSource  ActorSource
+  eventType    String
+  beforeStatus TaskStatus?
+  afterStatus  TaskStatus?
+  metadata     Json
+  createdAt    DateTime    @default(now())
+  task         UserTask    @relation(fields: [taskId], references: [id])
+  actor        User?       @relation(fields: [actorId], references: [id])
+
+  @@index([taskId, createdAt])
+}
+
+model AdminAuditLog {
+  id         String   @id @default(uuid())
+  adminId    String
+  action     String
+  targetType String
+  targetId   String
+  metadata   Json
+  createdAt  DateTime @default(now())
+
+  @@index([adminId, createdAt])
+}

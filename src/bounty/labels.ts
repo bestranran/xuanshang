@@ -1,0 +1,45 @@
+const statusLabels: Record<string, string> = {
+  DRAFT: "草稿",
+  PENDING_PAYMENT: "待支付",
+  PENDING_REVIEW: "待审核",
+  OPEN: "招募中",
+  IN_PROGRESS: "进行中",
+  JUDGING: "待验收",
+  COMPLETED: "已完成",
+  CANCELLED: "已取消",
+  REFUNDED: "已退款",
+  CLOSED: "已关闭",
+  PENDING: "待处理",
+  SELECTED: "已选中",
+  REJECTED: "已拒绝",
+  WITHDRAWN: "已撤回",
+  CREATED: "已创建",
+  PAID: "已支付",
+  HELD: "托管中",
+  RELEASED: "已释放",
+  AWARDED: "已发放",
+  COOLING: "冷却中",
+  BLOCKED: "已拦截",
+  CREDITED: "已入账",
+  REQUESTED: "待处理",
+  TOKEN_ISSUED: "口令已发放",
+};
+
+const entryTypeLabels: Record<string, string> = {
+  RECHARGE_PAID: "充值到账",
+  ESCROW_HELD: "悬赏托管",
+  ESCROW_REFUNDED: "托管退款",
+  AWARD_CREDITED: "奖励入账",
+  WITHDRAWAL_FROZEN: "提现冻结",
+  WITHDRAWAL_CANCELLED: "取消提现",
+  WITHDRAWAL_COMPLETED: "提现完成",
+  WITHDRAWAL_REJECTED: "提现退回",
+  SEED_RECHARGE: "演示充值",
+  TEST_CREDIT: "测试充值",
+  CONTEST_ESCROW_HELD: "比赛奖池托管",
+  CONTEST_ESCROW_REFUNDED: "比赛奖池退款",
+  CONTEST_AWARD_CREDITED: "比赛奖金入账",
+};
+
+export const statusLabel = (status: string) => statusLabels[status] ?? status;
+export const entryTypeLabel = (type: string) => entryTypeLabels[type] ?? type;

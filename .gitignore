@@ -5,15 +5,25 @@
 /candidate-gitpay/
 /candidate-mergeos/
 /superteam-earn/
+/upstream-open-saas/
+/upstream-xboard/
 
 # Local and generated files.
 .DS_Store
 .env
 .env.*
 !.env.example
+!.env.server.example
+!.env.client.example
 node_modules/
 .wasp/
 build/
 dist/
+dist-figma/
 coverage/
-
+*.tsbuildinfo
+.claude/
+CLAUDE.md
+pnpm-workspace.yaml
+docs/OPEN_SAAS_PRD_SPEC_PROMPT.md
+tools/
