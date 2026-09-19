@@ -3,8 +3,9 @@ import { app, page, route } from "@wasp.sh/spec";
 import { App } from "./src/client/App" with { type: "ref" };
 import { NotFoundPage } from "./src/client/components/NotFoundPage" with { type: "ref" };
 import { serverEnvValidationSchema } from "./src/env" with { type: "ref" };
-import { LandingPage } from "./src/landing-page/LandingPage" with { type: "ref" };
+import { TaskListPage } from "./src/bounty/pages/TaskListPage" with { type: "ref" };
 import { seedMockUsers } from "./src/server/scripts/dbSeeds" with { type: "ref" };
+import { serverMiddlewareConfigFn } from "./src/server/adminLoginRateLimit" with { type: "ref" };
 
 import { adminSpec } from "./src/admin/admin.wasp";
 import { authConfig, authSpec } from "./src/auth/auth.wasp";
@@ -14,6 +15,8 @@ import { head } from "./src/client/head.wasp";
 import { fileUploadSpec } from "./src/file-upload/file-upload.wasp";
 import { emailSender } from "./src/server/emailSender.wasp";
 import { userSpec } from "./src/user/user.wasp";
+import { announcementSpec } from "./src/announcement/announcement.wasp";
+import { giftCardSpec } from "./src/gift-card/gift-card.wasp";
 
 export default app({
   name: "Xuanshang",
@@ -33,17 +36,20 @@ export default app({
   },
   server: {
     envValidationSchema: serverEnvValidationSchema,
+    middlewareConfigFn: serverMiddlewareConfigFn,
   },
   emailSender,
   spec: [
     // Prerendering routes with static content creates HTML files at build time that are served immediately,
     // improving SEO, search engine/AI crawling, and performance: https://wasp.sh/docs/advanced/prerendering
-    route("LandingPageRoute", "/", page(LandingPage), { prerender: true }),
+    route("LandingPageRoute", "/", page(TaskListPage)),
     route("NotFoundRoute", "*", page(NotFoundPage)),
     authSpec,
     userSpec,
     bountySpec,
     contestSpec,
+    announcementSpec,
+    giftCardSpec,
     fileUploadSpec,
     adminSpec,
   ],

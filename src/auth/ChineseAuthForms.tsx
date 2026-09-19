@@ -30,7 +30,7 @@ function FormShell({ title, children }: { title: string; children: React.ReactNo
   return <div className="space-y-6 pt-8"><h1 className="text-center text-2xl font-bold">{title}</h1>{children}</div>;
 }
 
-export function ChineseLoginForm() {
+export function ChineseLoginForm({ redirectTo, title = "登录悬赏" }: { redirectTo?: string; title?: string } = {}) {
   const navigate = useNavigate();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -39,10 +39,10 @@ export function ChineseLoginForm() {
     const data = new FormData(event.currentTarget);
     try {
       await login({ email: String(data.get("email")), password: String(data.get("password")) });
-      navigate(routes.TaskListRoute.to);
+      navigate(redirectTo ?? routes.TaskListRoute.to, { replace: true });
     } catch (e) { setError(messageOf(e)); } finally { setBusy(false); }
   }
-  return <FormShell title="登录悬赏"><form className="grid gap-4" onSubmit={submit}>
+  return <FormShell title={title}><form className="grid gap-4" onSubmit={submit}>
     <Field label="邮箱" name="email" type="email" autoComplete="email" required />
     <Field label="密码" name="password" type="password" autoComplete="current-password" required />
     {error && <p className="text-sm text-destructive">{error}</p>}

@@ -2,8 +2,6 @@ import { defineEnvValidationSchema } from "wasp/env";
 
 import * as z from "zod";
 import { authEnvSchema } from "./auth/env";
-import { bountyEnvSchema } from "./bounty/env";
-import { fileUploadEnvSchema } from "./file-upload/env";
 
 // Wasp merges this schema with its built-in env var validations and uses it
 // to validate `process.env` at server startup. Access the validated env vars
@@ -14,8 +12,7 @@ import { fileUploadEnvSchema } from "./file-upload/env";
 // to also remove its env schema import and `...schema.shape` below.
 export const serverEnvValidationSchema = defineEnvValidationSchema(
   z.object({
+    APP_MASTER_KEY: z.string().min(43),
     ...authEnvSchema.shape,
-    ...bountyEnvSchema.shape,
-    ...fileUploadEnvSchema.shape,
   }),
 );

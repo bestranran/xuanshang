@@ -69,10 +69,20 @@ export function splitEscrow(
   earningsAvailableCents: number,
 ) {
   assertPositiveCents(budgetCents, "budgetCents");
+  if (!Number.isSafeInteger(rechargeAvailableCents) || rechargeAvailableCents < 0) {
+    throw new Error("rechargeAvailableCents must be a non-negative integer");
+  }
+  if (!Number.isSafeInteger(earningsAvailableCents) || earningsAvailableCents < 0) {
+    throw new Error("earningsAvailableCents must be a non-negative integer");
+  }
   const rechargeCents = Math.min(budgetCents, rechargeAvailableCents);
   const earningsCents = budgetCents - rechargeCents;
   if (earningsCents > earningsAvailableCents) throw new Error("insufficient balance");
   return { rechargeCents, earningsCents, totalCents: budgetCents };
+}
+
+export function taskCanReopen(claimDeadline: Date, now = new Date()) {
+  return claimDeadline > now;
 }
 
 export function encryptPayoutToken(token: string, base64Key: string) {

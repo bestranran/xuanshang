@@ -7,6 +7,7 @@ import {
   parseMoneyToCents,
   signEpayParams,
   splitEscrow,
+  taskCanReopen,
   verifyEpaySignature,
 } from "./core";
 
@@ -48,6 +49,18 @@ describe("epay protocol vector", () => {
 it("uses recharge balance first when holding escrow", () => {
   expect(splitEscrow(1_000, 700, 500)).toEqual({ rechargeCents: 700, earningsCents: 300, totalCents: 1_000 });
   expect(() => splitEscrow(1_001, 700, 300)).toThrow("insufficient balance");
+});
+
+it("rejects corrupted wallet balances before splitting escrow", () => {
+  expect(() => splitEscrow(100, -1, 101)).toThrow("rechargeAvailableCents");
+  expect(() => splitEscrow(100, 101, -1)).toThrow("earningsAvailableCents");
+});
+
+it("only reopens a task while its application window is still active", () => {
+  const now = new Date("2026-09-10T12:00:00.000Z");
+  expect(taskCanReopen(new Date("2026-09-10T12:00:00.001Z"), now)).toBe(true);
+  expect(taskCanReopen(new Date("2026-09-10T12:00:00.000Z"), now)).toBe(false);
+  expect(taskCanReopen(new Date("2026-09-10T11:59:59.999Z"), now)).toBe(false);
 });
 
 it("round-trips payout tokens with authenticated encryption", () => {

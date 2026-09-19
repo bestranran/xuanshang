@@ -6,11 +6,13 @@ import {
 } from "./core";
 
 describe("contest prize rules", () => {
-  it("adds the three prize amounts", () => {
+  it("adds one to three configured prize amounts", () => {
+    expect(calculateContestPrizeTotal([300])).toBe(300);
+    expect(calculateContestPrizeTotal([300, 200])).toBe(500);
     expect(calculateContestPrizeTotal([300, 200, 100])).toBe(600);
   });
 
-  it.each([[[300, 200]], [[300, 0, 100]], [[300, 10.5, 100]]])(
+  it.each([[[]], [[300, 200, 100, 50]], [[300, 0, 100]], [[300, 10.5, 100]]])(
     "rejects an invalid prize configuration: %j",
     (amounts) => {
       expect(() => calculateContestPrizeTotal(amounts)).toThrow();

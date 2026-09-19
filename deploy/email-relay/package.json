@@ -1,0 +1,11 @@
+{
+  "name": "xuanshang-email-relay",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "mailparser": "^3.7.4",
+    "nodemailer": "^10.0.2",
+    "pg": "^8.16.3",
+    "smtp-server": "^3.14.0"
+  }
+}

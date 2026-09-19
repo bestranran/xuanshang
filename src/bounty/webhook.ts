@@ -1,7 +1,10 @@
 import crypto from "node:crypto";
-import { env, prisma } from "wasp/server";
+import { prisma } from "wasp/server";
 import type { EpayNotify } from "wasp/server/api";
 import { parseMoneyToCents, verifyEpaySignature, type EpayParams } from "./core";
+import { getSystemSettings } from "../server/systemSettings";
+import { sendUserEmail } from "../server/userEmailNotifications";
+import { applyWalletMutation } from "../server/walletService";
 
 function payloadFrom(value: unknown): EpayParams {
   if (!value || typeof value !== "object") return {};
@@ -18,10 +21,12 @@ function hashPayload(payload: EpayParams) {
 }
 
 export const epayNotify: EpayNotify = async (request, response) => {
+  const settings = await getSystemSettings(["payment.epayKey"]);
   const payload = payloadFrom(request.body);
   const orderNo = payload.out_trade_no ?? "";
   const epayTradeNo = payload.trade_no ?? null;
-  const signatureValid = Boolean(env.EPAY_KEY) && verifyEpaySignature(payload, env.EPAY_KEY!);
+  const epayKey = settings["payment.epayKey"];
+  const signatureValid = Boolean(epayKey) && verifyEpaySignature(payload, epayKey!);
   const order = orderNo ? await prisma.rechargeOrder.findUnique({ where: { orderNo } }) : null;
   let validationResult = "OK";
   let processingResult = "REJECTED";
@@ -43,26 +48,7 @@ export const epayNotify: EpayNotify = async (request, response) => {
         if (existing?.status === "PAID" && existing.epayTradeNo === epayTradeNo) return "LEGAL_DUPLICATE";
         throw new Error("ORDER_ALREADY_PROCESSED");
       }
-      const wallet = await tx.walletAccount.upsert({
-        where: { userId: order.userId },
-        update: { rechargeAvailableCents: { increment: order.creditCents }, version: { increment: 1 } },
-        create: { userId: order.userId, rechargeAvailableCents: order.creditCents },
-      });
-      await tx.walletEntry.create({
-        data: {
-          userId: order.userId,
-          type: "RECHARGE_PAID",
-          rechargeDeltaCents: order.creditCents,
-          referenceType: "RECHARGE_ORDER",
-          referenceId: order.id,
-          idempotencyKey: `recharge:${order.id}:credit`,
-          balanceSnapshot: {
-            rechargeAvailableCents: wallet.rechargeAvailableCents,
-            earningsAvailableCents: wallet.earningsAvailableCents,
-            withdrawalFrozenCents: wallet.withdrawalFrozenCents,
-          },
-        },
-      });
+      await applyWalletMutation(tx, { userId: order.userId, delta: { rechargeCents: order.creditCents }, type: "RECHARGE_PAID", referenceType: "RECHARGE_ORDER", referenceId: order.id, idempotencyKey: `recharge:${order.id}:credit` });
       return "CREDITED";
     }, { isolationLevel: "Serializable" });
   } catch (error) {
@@ -81,6 +67,10 @@ export const epayNotify: EpayNotify = async (request, response) => {
       processingResult,
     },
   });
+
+  if (processingResult === "CREDITED" && order) {
+    void sendUserEmail(prisma, order.userId, "walletEmails", "充值已到账", `充值金额 ¥${(order.creditCents / 100).toFixed(2)} 已进入你的充值余额。`);
+  }
 
   if (processingResult === "CREDITED" || processingResult === "LEGAL_DUPLICATE") {
     return response.status(200).type("text/plain").send("success");

@@ -1,0 +1,26 @@
+{$DOMAIN} {
+  encode zstd gzip
+
+  @backend path /auth /auth/* /operations /operations/* /epay/notify
+  handle @backend {
+    reverse_proxy app:3001 {
+      header_up X-Forwarded-For {remote_host}
+    }
+  }
+
+  handle {
+    root * /srv
+    try_files {path} {path}.html /200.html
+    file_server
+  }
+
+  header {
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    Content-Security-Policy "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+    X-Frame-Options DENY
+    X-Content-Type-Options nosniff
+    Permissions-Policy "camera=(), microphone=(), geolocation=()"
+    Referrer-Policy strict-origin-when-cross-origin
+    -Server
+  }
+}

@@ -1,0 +1,12 @@
+.git
+.wasp
+node_modules
+figma-src
+dist-figma
+candidate-*
+upstream-*
+superteam-earn
+deploy/.env
+deploy/backups
+*.log
+.DS_Store

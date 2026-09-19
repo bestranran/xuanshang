@@ -1,7 +1,14 @@
-import { LayoutDashboard, Settings, Shield } from "lucide-react";
+import { BriefcaseBusiness, LayoutDashboard, Settings } from "lucide-react";
 import { routes } from "wasp/client/router";
 
 export const userMenuItems = [
+  {
+    name: "我的工作",
+    to: routes.MyWorkRoute.to,
+    icon: BriefcaseBusiness,
+    isAdminOnly: false,
+    isAuthRequired: true,
+  },
   {
     name: "悬赏大厅",
     to: routes.TaskListRoute.to,
@@ -15,12 +22,5 @@ export const userMenuItems = [
     icon: Settings,
     isAuthRequired: false,
     isAdminOnly: false,
-  },
-  {
-    name: "管理后台",
-    to: routes.AdminRoute.to,
-    icon: Shield,
-    isAuthRequired: false,
-    isAdminOnly: true,
   },
 ] as const;

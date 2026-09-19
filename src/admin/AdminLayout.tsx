@@ -2,16 +2,21 @@ import {
   ArrowLeft,
   ClipboardCheck,
   LayoutDashboard,
+  ReceiptText,
   Menu,
   ScrollText,
   ShieldAlert,
   Users,
   WalletCards,
+  Settings,
   X,
+  Megaphone,
+  Gift,
 } from "lucide-react";
 import { ReactNode, useEffect, useState } from "react";
 import { NavLink, useLocation } from "react-router";
 import type { User } from "wasp/entities";
+import { getPublicSiteSettings, useQuery } from "wasp/client/operations";
 import { Link, routes } from "wasp/client/router";
 import { DarkModeSwitcher } from "../client/components/DarkModeSwitcher";
 import logo from "../client/static/logo.svg";
@@ -28,6 +33,10 @@ const navigation = [
   { label: "奖励冷却", route: routes.AdminAwardsRoute.to, icon: ShieldAlert, count: "awards" },
   { label: "用户管理", route: routes.AdminUsersRoute.to, icon: Users },
   { label: "审计记录", route: routes.AdminAuditRoute.to, icon: ScrollText },
+  { label: "资金流水", route: routes.AdminLedgerRoute.to, icon: ReceiptText },
+  { label: "公告管理", route: routes.AdminAnnouncementsRoute.to, icon: Megaphone },
+  { label: "礼品卡管理", route: routes.AdminGiftCardsRoute.to, icon: Gift },
+  { label: "系统设置", route: routes.AdminSettingsRoute.to, icon: Settings },
 ] as const;
 
 export function AdminLayout({
@@ -45,6 +54,9 @@ export function AdminLayout({
 }) {
   const [open, setOpen] = useState(false);
   const { pathname } = useLocation();
+  const { data: siteSettings } = useQuery(getPublicSiteSettings);
+  const siteTitle = siteSettings?.title || "悬赏";
+  const siteLogo = siteSettings?.logoUrl || logo;
   useEffect(() => { setOpen(false); }, [pathname]);
 
   return <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
@@ -52,8 +64,8 @@ export function AdminLayout({
     <aside className={cn("fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r border-slate-800 bg-slate-950 text-slate-200 transition-transform lg:translate-x-0", open ? "translate-x-0" : "-translate-x-full")}>
       <div className="flex h-20 items-center justify-between border-b border-slate-800 px-6">
         <Link to={routes.AdminRoute.to} className="flex items-center gap-3 font-semibold text-white">
-          <img src={logo} alt="悬赏" className="size-9 rounded-lg" />
-          <span><span className="block text-base">悬赏管理台</span><span className="block text-xs font-normal text-slate-400">运营与资金控制中心</span></span>
+          <img src={siteLogo} alt={`${siteTitle} Logo`} className="size-9 rounded-lg object-cover" onError={(event) => { if (event.currentTarget.src !== logo) event.currentTarget.src = logo; }} />
+          <span><span className="block text-base">{siteTitle}管理台</span><span className="block text-xs font-normal text-slate-400">运营与资金控制中心</span></span>
         </Link>
         <button className="lg:hidden" aria-label="关闭侧边栏" onClick={() => setOpen(false)}><X className="size-5" /></button>
       </div>
@@ -63,7 +75,7 @@ export function AdminLayout({
           {navigation.map((item) => {
             const Icon = item.icon;
             const count = "count" in item ? counts[item.count] : undefined;
-            return <li key={item.route}><NavLink to={item.route} end className={({ isActive }) => cn("flex items-center gap-3 rounded-xl px-3 py-3 text-sm transition", isActive ? "bg-amber-400 font-semibold text-slate-950" : "text-slate-300 hover:bg-slate-900 hover:text-white")}>
+            return <li key={item.route}><NavLink to={item.route} end className={({ isActive }) => cn("flex items-center gap-3 rounded-xl px-3 py-3 text-sm transition", isActive || (item.route === routes.AdminUsersRoute.to && pathname.startsWith(`${routes.AdminUsersRoute.to}/`)) ? "bg-amber-400 font-semibold text-slate-950" : "text-slate-300 hover:bg-slate-900 hover:text-white")}>
               <Icon className="size-5" /><span className="flex-1">{item.label}</span>{Boolean(count) && <span className="rounded-full bg-white/15 px-2 py-0.5 text-xs">{count}</span>}
             </NavLink></li>;
           })}
@@ -71,7 +83,7 @@ export function AdminLayout({
         <p className="mb-3 mt-8 px-3 text-xs font-semibold tracking-[0.18em] text-slate-500">快捷入口</p>
         <Link to={routes.TaskListRoute.to} className="flex items-center gap-3 rounded-xl px-3 py-3 text-sm text-slate-300 transition hover:bg-slate-900 hover:text-white"><ArrowLeft className="size-5" />返回悬赏大厅</Link>
       </nav>
-      <div className="border-t border-slate-800 px-6 py-5 text-xs text-slate-500">悬赏平台 · 管理员专用</div>
+      <div className="border-t border-slate-800 px-6 py-5 text-xs text-slate-500">{siteTitle} · 管理员专用</div>
     </aside>
     <div className="lg:pl-72">
       <header className="sticky top-0 z-30 flex h-20 items-center gap-4 border-b bg-background/95 px-5 backdrop-blur md:px-8">

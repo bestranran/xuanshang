@@ -2,10 +2,11 @@ export type ContestPrizeRank = "FIRST" | "SECOND" | "THIRD";
 
 export function calculateContestPrizeTotal(prizeCents: readonly number[]) {
   if (
-    prizeCents.length !== 3 ||
+    prizeCents.length < 1 ||
+    prizeCents.length > 3 ||
     prizeCents.some((amount) => !Number.isSafeInteger(amount) || amount <= 0)
   ) {
-    throw new Error("contest prizes must contain three positive integer amounts");
+    throw new Error("contest prizes must contain one to three positive integer amounts");
   }
   const total = prizeCents.reduce((sum, amount) => sum + amount, 0);
   if (!Number.isSafeInteger(total)) throw new Error("contest prize total is unsafe");

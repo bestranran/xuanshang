@@ -1,45 +1,29 @@
 import { HttpError, prisma } from "wasp/server";
 import type {
-  CancelContest,
+  AnswerContestQuestion, AskContestQuestion, CancelContest,
   CloseContest,
   CreateContest,
   GetContestDetails,
   GetContests,
   SelectContestWinners,
   SetContestAwardBlocked,
+  SetContestEntryFeedback,
   SubmitContest,
   SubmitContestEntry,
 } from "wasp/server/operations";
 import * as z from "zod";
 import { splitEscrow } from "../bounty/core";
-import { buildContestPrizeSelections, calculateContestPrizeTotal } from "./core";
-
-const serializable = { isolationLevel: "Serializable" as const };
-
-function input<T>(schema: z.ZodType<T>, value: unknown): T {
-  const parsed = schema.safeParse(value);
-  if (!parsed.success) throw new HttpError(400, z.prettifyError(parsed.error));
-  return parsed.data;
-}
-
-function user(context: { user?: { id: string; isBanned: boolean } | null }) {
-  if (!context.user) throw new HttpError(401);
-  if (context.user.isBanned) throw new HttpError(403, "该账号已被封禁，当前仅可查看");
-  return context.user;
-}
-
-function admin(context: { user?: { id: string; isAdmin: boolean; isBanned: boolean } | null }) {
-  if (!context.user?.isAdmin) throw new HttpError(403);
-  if (context.user.isBanned) throw new HttpError(403, "该管理员账号已被封禁");
-  return context.user;
-}
+import { sendUserEmail } from "../server/userEmailNotifications";
+import { calculateContestPrizeTotal } from "./core";
+import { parseInput as input, requireAdmin as admin, requireUser as user, serializable } from "../server/operationUtils";
+import { applyWalletMutation } from "../server/walletService";
 
 const contestInput = z.object({
   title: z.string().trim().min(3).max(120),
   description: z.string().trim().min(10).max(20_000),
   firstPrizeCents: z.number().int().positive().max(100_000_000),
-  secondPrizeCents: z.number().int().positive().max(100_000_000),
-  thirdPrizeCents: z.number().int().positive().max(100_000_000),
+  secondPrizeCents: z.number().int().positive().max(100_000_000).optional(),
+  thirdPrizeCents: z.number().int().positive().max(100_000_000).optional(),
   submissionDeadline: z.coerce.date(),
 });
 
@@ -62,24 +46,32 @@ export const getContestDetails: GetContestDetails<{ id: string }, any> = async (
   const contest = await prisma.contest.findUnique({
     where: { id },
     include: {
-      publisher: { select: { id: true, username: true } },
+      publisher: { select: { id: true, username: true, avatarUrl: true, bio: true } },
       prizes: { include: { winner: { include: { entrant: { select: { id: true, username: true } } } }, award: true }, orderBy: { amountCents: "desc" } },
-      entries: { include: { entrant: { select: { id: true, username: true } } }, orderBy: { submittedAt: "asc" } },
+      entries: { include: { entrant: { select: { id: true, username: true } }, versions: { include: { files: { where: { status: "ATTACHED" } } }, orderBy: { version: "asc" } } }, orderBy: { submittedAt: "asc" } },
+      questions: { include: { asker: { select: { id: true, username: true, avatarUrl: true } }, answerer: { select: { id: true, username: true } } }, orderBy: { createdAt: "asc" } },
     },
   });
   if (!contest) throw new HttpError(404);
   const isAdmin = Boolean(context.user?.isAdmin);
   const isPublisher = context.user?.id === contest.publisherId;
-  const deadlinePassed = contest.submissionDeadline <= new Date();
+  if (!isAdmin && !isPublisher && !["OPEN", "JUDGING", "COOLING", "COMPLETED"].includes(contest.status)) throw new HttpError(404);
   const ownEntry = contest.entries.find((entry) => entry.entrantId === context.user?.id);
-  return { ...contest, entries: isAdmin || isPublisher || deadlinePassed ? contest.entries : ownEntry ? [ownEntry] : [] };
+  const publicGallery = ["COOLING", "COMPLETED"].includes(contest.status);
+  const visibleEntries = isAdmin || isPublisher || publicGallery ? contest.entries : ownEntry ? [ownEntry] : [];
+  return { ...contest, entries: visibleEntries.map((entry) => {
+    const versions = isAdmin || isPublisher || entry.entrantId === context.user?.id ? entry.versions : entry.versions.slice(-1);
+    return { ...entry, content: entry.versions.at(-1)?.content ?? "", versions };
+  }) };
 };
 
 export const createContest: CreateContest<z.infer<typeof contestInput>, any> = async (raw, context) => {
   const current = user(context);
   const args = input(contestInput, raw);
   if (args.submissionDeadline <= new Date()) throw new HttpError(400, "投稿截止时间必须晚于当前时间");
-  const totalPrizeCents = calculateContestPrizeTotal([args.firstPrizeCents, args.secondPrizeCents, args.thirdPrizeCents]);
+  if (args.thirdPrizeCents && !args.secondPrizeCents) throw new HttpError(400, "设置三等奖前需要先设置二等奖");
+  const prizeInputs = [["FIRST", args.firstPrizeCents], ["SECOND", args.secondPrizeCents], ["THIRD", args.thirdPrizeCents]].filter((item): item is ["FIRST" | "SECOND" | "THIRD", number] => typeof item[1] === "number");
+  const totalPrizeCents = calculateContestPrizeTotal(prizeInputs.map(([, amount]) => amount));
   if (totalPrizeCents > 100_000_000) throw new HttpError(400, "奖金总额不能超过 100 万元");
   return prisma.$transaction(async (tx) => {
     const contest = await tx.contest.create({
@@ -89,25 +81,20 @@ export const createContest: CreateContest<z.infer<typeof contestInput>, any> = a
         description: args.description,
         totalPrizeCents,
         submissionDeadline: args.submissionDeadline,
-        prizes: { create: [
-          { rank: "FIRST", amountCents: args.firstPrizeCents },
-          { rank: "SECOND", amountCents: args.secondPrizeCents },
-          { rank: "THIRD", amountCents: args.thirdPrizeCents },
-        ] },
+        prizes: { create: prizeInputs.map(([rank, amountCents]) => ({ rank, amountCents })) },
       },
       include: { prizes: true },
     });
     const wallet = await tx.walletAccount.upsert({ where: { userId: current.id }, update: {}, create: { userId: current.id } });
     let parts;
     try { parts = splitEscrow(totalPrizeCents, wallet.rechargeAvailableCents, wallet.earningsAvailableCents); }
-    catch { return tx.contest.update({ where: { id: contest.id }, data: { status: "PENDING_PAYMENT" }, include: { prizes: true } }); }
-    const changed = await tx.walletAccount.updateMany({
-      where: { userId: current.id, version: wallet.version, rechargeAvailableCents: { gte: parts.rechargeCents }, earningsAvailableCents: { gte: parts.earningsCents } },
-      data: { rechargeAvailableCents: { decrement: parts.rechargeCents }, earningsAvailableCents: { decrement: parts.earningsCents }, version: { increment: 1 } },
-    });
-    if (changed.count !== 1) throw new HttpError(409, "余额已变化，请重试");
+    catch {
+      const pending = await tx.contest.update({ where: { id: contest.id }, data: { status: "PENDING_PAYMENT" }, include: { prizes: true } });
+      const availableCents = wallet.rechargeAvailableCents + wallet.earningsAvailableCents;
+      return { ...pending, paymentShortfall: { requiredCents: totalPrizeCents, availableCents, shortfallCents: totalPrizeCents - availableCents } };
+    }
+    await applyWalletMutation(tx, { userId: current.id, delta: { rechargeCents: -parts.rechargeCents, earningsCents: -parts.earningsCents }, type: "CONTEST_ESCROW_HELD", referenceType: "CONTEST", referenceId: contest.id, idempotencyKey: `contest:${contest.id}:hold` });
     await tx.contestEscrow.create({ data: { contestId: contest.id, publisherId: current.id, ...parts } });
-    await tx.walletEntry.create({ data: { userId: current.id, type: "CONTEST_ESCROW_HELD", rechargeDeltaCents: -parts.rechargeCents, earningsDeltaCents: -parts.earningsCents, referenceType: "CONTEST", referenceId: contest.id, idempotencyKey: `contest:${contest.id}:hold`, balanceSnapshot: { rechargeAvailableCents: wallet.rechargeAvailableCents - parts.rechargeCents, earningsAvailableCents: wallet.earningsAvailableCents - parts.earningsCents, withdrawalFrozenCents: wallet.withdrawalFrozenCents } } });
     return tx.contest.update({ where: { id: contest.id }, data: { status: "OPEN" }, include: { prizes: true } });
   }, serializable);
 };
@@ -124,10 +111,8 @@ export const submitContest: SubmitContest<{ contestId: string }, any> = async (r
     let parts;
     try { parts = splitEscrow(contest.totalPrizeCents, wallet.rechargeAvailableCents, wallet.earningsAvailableCents); }
     catch { throw new HttpError(409, "余额不足，请先充值"); }
-    const changed = await tx.walletAccount.updateMany({ where: { userId: current.id, version: wallet.version, rechargeAvailableCents: { gte: parts.rechargeCents }, earningsAvailableCents: { gte: parts.earningsCents } }, data: { rechargeAvailableCents: { decrement: parts.rechargeCents }, earningsAvailableCents: { decrement: parts.earningsCents }, version: { increment: 1 } } });
-    if (changed.count !== 1) throw new HttpError(409, "余额已变化，请重试");
+    await applyWalletMutation(tx, { userId: current.id, delta: { rechargeCents: -parts.rechargeCents, earningsCents: -parts.earningsCents }, type: "CONTEST_ESCROW_HELD", referenceType: "CONTEST", referenceId: contest.id, idempotencyKey: `contest:${contest.id}:hold` });
     await tx.contestEscrow.create({ data: { contestId, publisherId: current.id, ...parts } });
-    await tx.walletEntry.create({ data: { userId: current.id, type: "CONTEST_ESCROW_HELD", rechargeDeltaCents: -parts.rechargeCents, earningsDeltaCents: -parts.earningsCents, referenceType: "CONTEST", referenceId: contest.id, idempotencyKey: `contest:${contest.id}:hold`, balanceSnapshot: { rechargeAvailableCents: wallet.rechargeAvailableCents - parts.rechargeCents, earningsAvailableCents: wallet.earningsAvailableCents - parts.earningsCents, withdrawalFrozenCents: wallet.withdrawalFrozenCents } } });
     return tx.contest.update({ where: { id: contest.id }, data: { status: "OPEN" } });
   }, serializable);
 };
@@ -141,32 +126,42 @@ export const cancelContest: CancelContest<{ contestId: string }, any> = async (r
   return prisma.contest.update({ where: { id: contest.id }, data: { status: "CANCELLED" } });
 };
 
-export const submitContestEntry: SubmitContestEntry<{ contestId: string; content: string }, any> = async (raw, context) => {
+export const submitContestEntry: SubmitContestEntry<{ contestId: string; content: string; fileIds?: string[] }, any> = async (raw, context) => {
   const current = user(context);
-  const args = input(z.object({ contestId: z.string().uuid(), content: z.string().trim().min(10).max(20_000) }), raw);
+  const args = input(z.object({ contestId: z.string().uuid(), content: z.string().trim().min(10).max(20_000), fileIds: z.array(z.string().uuid()).max(6).default([]) }), raw);
   const contest = await prisma.contest.findUnique({ where: { id: args.contestId } });
   if (!contest || contest.status !== "OPEN" || contest.submissionDeadline <= new Date()) throw new HttpError(409, "当前不可投稿");
   if (contest.publisherId === current.id) throw new HttpError(403, "不能参加自己发布的比赛");
-  return prisma.contestEntry.upsert({ where: { contestId_entrantId: { contestId: contest.id, entrantId: current.id } }, update: { content: args.content }, create: { contestId: contest.id, entrantId: current.id, content: args.content } });
+  const entry = await prisma.$transaction(async (tx) => {
+    const files = args.fileIds.length ? await tx.file.findMany({ where: { id: { in: args.fileIds }, userId: current.id, targetType: "CONTEST", targetId: contest.id, status: "READY" } }) : [];
+    if (files.length !== new Set(args.fileIds).size) throw new HttpError(400, "附件不存在、尚未上传完成或不属于当前比赛");
+    if (files.filter((file) => file.kind === "VIDEO").length > 1 || files.filter((file) => file.kind === "ATTACHMENT").length > 5) throw new HttpError(400, "每版最多上传 1 个视频和 5 个普通附件");
+    const saved = await tx.contestEntry.upsert({ where: { contestId_entrantId: { contestId: contest.id, entrantId: current.id } }, update: { updatedAt: new Date() }, create: { contestId: contest.id, entrantId: current.id } });
+    const versionCount = await tx.contestEntryVersion.count({ where: { contestEntryId: saved.id } });
+    const version = await tx.contestEntryVersion.create({ data: { contestEntryId: saved.id, content: args.content, version: versionCount + 1 } });
+    if (files.length) {
+      const attached = await tx.file.updateMany({ where: { id: { in: files.map((file) => file.id) }, status: "READY" }, data: { status: "ATTACHED", contestEntryVersionId: version.id, attachedAt: new Date(), deleteAfter: null } });
+      if (attached.count !== files.length) throw new HttpError(409, "附件状态已变化，请重新提交");
+    }
+    return saved;
+  }, serializable);
+  void sendUserEmail(prisma, contest.publisherId, "contestEmails", "比赛收到新投稿", `“${contest.title}”收到了一份投稿，请在投稿截止后进行评选。`);
+  return entry;
 };
 
-export const selectContestWinners: SelectContestWinners<{ contestId: string; firstEntryId: string; secondEntryId: string; thirdEntryId: string }, any> = async (raw, context) => {
+export const selectContestWinners: SelectContestWinners<{ contestId: string; firstEntryId: string; secondEntryId?: string; thirdEntryId?: string }, any> = async (raw, context) => {
   const current = user(context);
-  const args = input(z.object({ contestId: z.string().uuid(), firstEntryId: z.string().uuid(), secondEntryId: z.string().uuid(), thirdEntryId: z.string().uuid() }), raw);
-  let selections;
-  try {
-    selections = buildContestPrizeSelections(args.firstEntryId, args.secondEntryId, args.thirdEntryId);
-  } catch {
-    throw new HttpError(400, "一、二、三等奖必须由三位不同参赛者获得");
-  }
+  const args = input(z.object({ contestId: z.string().uuid(), firstEntryId: z.string().uuid(), secondEntryId: z.string().uuid().optional(), thirdEntryId: z.string().uuid().optional() }), raw);
+  const selections = [["FIRST", args.firstEntryId], ["SECOND", args.secondEntryId], ["THIRD", args.thirdEntryId]].filter((item): item is ["FIRST" | "SECOND" | "THIRD", string] => Boolean(item[1]));
   const winnerIds = selections.map(([, entryId]) => entryId);
-  return prisma.$transaction(async (tx) => {
+  if (new Set(winnerIds).size !== winnerIds.length) throw new HttpError(400, "每个奖项必须由不同参赛者获得");
+  const result = await prisma.$transaction(async (tx) => {
     const contest = await tx.contest.findUnique({ where: { id: args.contestId }, include: { prizes: true, escrow: true, awards: true } });
     if (!contest || contest.publisherId !== current.id) throw new HttpError(404);
     if (contest.submissionDeadline > new Date()) throw new HttpError(409, "投稿截止后才能评奖");
     if (!["OPEN", "JUDGING"].includes(contest.status) || !contest.escrow || contest.escrow.status !== "HELD" || contest.awards.length) throw new HttpError(409, "比赛当前不可评奖");
     const entries = await tx.contestEntry.findMany({ where: { contestId: contest.id, id: { in: winnerIds } } });
-    if (entries.length !== 3) throw new HttpError(400, "获奖者必须来自本场比赛");
+    if (selections.length !== contest.prizes.length || entries.length !== selections.length) throw new HttpError(400, "请为每个奖项选择一位本场参赛者");
     const prizeByRank = new Map(contest.prizes.map((prize) => [prize.rank, prize]));
     const availableAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
     for (const [rank, entryId] of selections) {
@@ -179,6 +174,34 @@ export const selectContestWinners: SelectContestWinners<{ contestId: string; fir
     await tx.contest.update({ where: { id: contest.id }, data: { status: "COOLING" } });
     return { contestId: contest.id, status: "COOLING", availableAt };
   }, serializable);
+  const winners = await prisma.contestEntry.findMany({ where: { id: { in: winnerIds } }, select: { entrantId: true, contest: { select: { title: true } } } });
+  for (const winner of winners) void sendUserEmail(prisma, winner.entrantId, "contestEmails", "恭喜你在比赛中获奖", `你在“${winner.contest.title}”中获奖，奖金将在冷却期结束后到账。`);
+  return result;
+};
+
+export const setContestEntryFeedback: SetContestEntryFeedback<{ entryId: string; shortlisted: boolean; feedback?: string }, any> = async (raw, context) => {
+  const current = user(context);
+  const args = input(z.object({ entryId: z.string().uuid(), shortlisted: z.boolean(), feedback: z.string().trim().max(2_000).optional() }), raw);
+  const entry = await prisma.contestEntry.findUnique({ where: { id: args.entryId }, include: { contest: true } });
+  if (!entry || entry.contest.publisherId !== current.id) throw new HttpError(404);
+  if (entry.contest.submissionDeadline > new Date() || !["OPEN", "JUDGING"].includes(entry.contest.status)) throw new HttpError(409, "投稿截止后才能评审");
+  return prisma.contestEntry.update({ where: { id: entry.id }, data: { shortlisted: args.shortlisted, privateFeedback: args.feedback || null } });
+};
+
+export const askContestQuestion: AskContestQuestion<{ contestId: string; question: string }, any> = async (raw, context) => {
+  const current = user(context);
+  const args = input(z.object({ contestId: z.string().uuid(), question: z.string().trim().min(3).max(1_000) }), raw);
+  const contest = await prisma.contest.findUnique({ where: { id: args.contestId } });
+  if (!contest || contest.status !== "OPEN" || contest.submissionDeadline <= new Date()) throw new HttpError(409, "当前不可提问");
+  return prisma.contestQuestion.create({ data: { contestId: contest.id, askerId: current.id, question: args.question } });
+};
+
+export const answerContestQuestion: AnswerContestQuestion<{ questionId: string; answer: string }, any> = async (raw, context) => {
+  const current = user(context);
+  const args = input(z.object({ questionId: z.string().uuid(), answer: z.string().trim().min(2).max(2_000) }), raw);
+  const question = await prisma.contestQuestion.findUnique({ where: { id: args.questionId }, include: { contest: true } });
+  if (!question || question.contest.publisherId !== current.id) throw new HttpError(404);
+  return prisma.contestQuestion.update({ where: { id: question.id }, data: { answer: args.answer, answererId: current.id, answeredAt: new Date() } });
 };
 
 export const closeContest: CloseContest<{ contestId: string; reason: string }, any> = async (raw, context) => {
@@ -190,8 +213,7 @@ export const closeContest: CloseContest<{ contestId: string; reason: string }, a
     if (contest.awards.length) throw new HttpError(409, "比赛已经评奖，请先在奖励页面处理");
     const afterStatus = contest.escrow?.status === "HELD" ? "REFUNDED" : "CLOSED";
     if (contest.escrow?.status === "HELD") {
-      const wallet = await tx.walletAccount.update({ where: { userId: contest.publisherId }, data: { rechargeAvailableCents: { increment: contest.escrow.rechargeCents }, earningsAvailableCents: { increment: contest.escrow.earningsCents }, version: { increment: 1 } } });
-      await tx.walletEntry.create({ data: { userId: contest.publisherId, type: "CONTEST_ESCROW_REFUNDED", rechargeDeltaCents: contest.escrow.rechargeCents, earningsDeltaCents: contest.escrow.earningsCents, referenceType: "CONTEST", referenceId: contest.id, idempotencyKey: `contest:${contest.id}:admin-close-refund`, balanceSnapshot: { rechargeAvailableCents: wallet.rechargeAvailableCents, earningsAvailableCents: wallet.earningsAvailableCents, withdrawalFrozenCents: wallet.withdrawalFrozenCents } } });
+      await applyWalletMutation(tx, { userId: contest.publisherId, delta: { rechargeCents: contest.escrow.rechargeCents, earningsCents: contest.escrow.earningsCents }, type: "CONTEST_ESCROW_REFUNDED", referenceType: "CONTEST", referenceId: contest.id, idempotencyKey: `contest:${contest.id}:admin-close-refund` });
       await tx.contestEscrow.update({ where: { contestId: contest.id }, data: { status: "RELEASED", releasedAt: new Date() } });
     }
     await tx.contest.update({ where: { id: contest.id }, data: { status: afterStatus } });

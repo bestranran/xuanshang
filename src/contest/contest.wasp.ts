@@ -3,18 +3,18 @@ import { action, page, query, route, type Spec } from "@wasp.sh/spec";
 import { ContestDetailsPage } from "./pages/ContestDetailsPage" with { type: "ref" };
 import { ContestListPage } from "./pages/ContestListPage" with { type: "ref" };
 import {
-  cancelContest,
+  answerContestQuestion, askContestQuestion, cancelContest,
   closeContest,
   createContest,
   getContestDetails,
   getContests,
   selectContestWinners,
-  setContestAwardBlocked,
+  setContestAwardBlocked, setContestEntryFeedback,
   submitContest,
   submitContestEntry,
 } from "./operations" with { type: "ref" };
 
-const entities = ["User", "Contest", "ContestPrize", "ContestEntry", "ContestEscrow", "ContestAward", "WalletAccount", "WalletEntry", "AdminAuditLog"] as const;
+const entities = ["User", "Contest", "ContestPrize", "ContestEntry", "ContestEntryVersion", "File", "ContestEscrow", "ContestAward", "ContestQuestion", "WalletAccount", "WalletEntry", "AdminAuditLog"] as const;
 
 export const contestSpec: Spec = [
   route("ContestListRoute", "/contests", page(ContestListPage)),
@@ -28,4 +28,7 @@ export const contestSpec: Spec = [
   action(selectContestWinners, { entities: [...entities] }),
   action(closeContest, { entities: [...entities] }),
   action(setContestAwardBlocked, { entities: [...entities] }),
+  action(setContestEntryFeedback, { entities: [...entities] }),
+  action(askContestQuestion, { entities: [...entities] }),
+  action(answerContestQuestion, { entities: [...entities] }),
 ];

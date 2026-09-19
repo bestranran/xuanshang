@@ -16,11 +16,14 @@
 !.env.server.example
 !.env.client.example
 node_modules/
+.pnpm-store/
 .wasp/
 build/
 dist/
 dist-figma/
 coverage/
+deploy/backups/*.dump
+deploy/.deployed-version
 *.tsbuildinfo
 .claude/
 CLAUDE.md

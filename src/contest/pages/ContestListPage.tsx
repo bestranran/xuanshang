@@ -1,56 +1,54 @@
 import { useState } from "react";
+import { Award, Plus, Trophy } from "lucide-react";
 import { Link } from "react-router";
 import { useAuth } from "wasp/client/auth";
 import { createContest, getContests, useQuery } from "wasp/client/operations";
 import { routes } from "wasp/client/router";
 import { Button } from "../../client/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "../../client/components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "../../client/components/ui/dialog";
 import { Input } from "../../client/components/ui/input";
+import { RechargeRequiredDialog, type PaymentShortfall } from "../../bounty/components/RechargeRequiredDialog";
 import { contestStatusLabel, prizeRankLabel } from "../labels";
+import { formatPublicNo } from "../../shared/publicNo";
 
-const money = (cents: number) => new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY" }).format(cents / 100);
-
+const money = (cents: number) => new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY", maximumFractionDigits: 0 }).format(cents / 100);
 export function ContestListPage() {
   const { data: user } = useAuth();
-  const [search, setSearch] = useState("");
-  const query = useQuery(getContests, { search });
-  const contests = (query.data ?? []) as any[];
-  return <main className="mx-auto max-w-6xl space-y-8 px-6 py-10">
-    <section className="rounded-3xl bg-gradient-to-br from-violet-950 via-slate-950 to-amber-950 px-8 py-12 text-white"><p className="mb-3 text-sm font-semibold tracking-[0.2em] text-amber-300">创意比赛</p><h1 className="max-w-3xl text-4xl font-bold tracking-tight md:text-6xl">同题竞技，三个奖项</h1><p className="mt-5 max-w-2xl text-slate-300">发布者设置一、二、三等奖奖金，所有参赛者直接投稿，截止后统一评奖。</p></section>
-    <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索比赛标题" />
-    {user && <CreateContestCard onCreated={() => void query.refetch()} />}
-    <section className="grid gap-4 md:grid-cols-2">{query.isLoading ? <p>正在加载…</p> : contests.map((contest) => {
-      const effectiveStatus = contest.status === "OPEN" && new Date(contest.submissionDeadline) <= new Date() ? "JUDGING" : contest.status;
-      return <Link key={contest.id} to={routes.ContestDetailsRoute.build({ params: { id: contest.id } })}><Card className="h-full transition hover:-translate-y-0.5 hover:shadow-lg"><CardHeader><CardTitle>{contest.title}</CardTitle></CardHeader><CardContent className="space-y-3"><p className="line-clamp-2 text-sm text-muted-foreground">{contest.description}</p><div className="grid grid-cols-3 gap-2">{contest.prizes.map((prize: any) => <div key={prize.id} className="rounded-lg bg-muted p-2 text-center text-xs"><span className="block text-muted-foreground">{prizeRankLabel(prize.rank)}</span><strong>{money(prize.amountCents)}</strong></div>)}</div><div className="flex items-center justify-between"><strong className="text-amber-600">奖池 {money(contest.totalPrizeCents)}</strong><span className="rounded-full bg-slate-100 px-3 py-1 text-xs dark:bg-slate-800">{contestStatusLabel(effectiveStatus)}</span></div>{contest.publisherId === user?.id && <p className="text-xs font-medium text-blue-600">我发布的比赛</p>}<p className="text-xs text-muted-foreground">{contest._count.entries} 份投稿 · {contest.publisher.username ?? "匿名用户"}</p></CardContent></Card></Link>;
-    })}</section>
+  const [paymentShortfall, setPaymentShortfall] = useState<PaymentShortfall | null>(null);
+  const query = useQuery(getContests, {});
+  const now = new Date();
+  const contests = ((query.data ?? []) as any[]).map((contest) => ({ ...contest, effectiveStatus: contest.status === "OPEN" && new Date(contest.submissionDeadline) <= now ? "JUDGING" : contest.status }));
+  const openCount = contests.filter((contest) => contest.effectiveStatus === "OPEN").length;
+  return <main className="market-page">
+    <div className="market-page-header"><div><span className="market-eyebrow">创意比赛</span><h1>发现比赛</h1><p>{openCount} 个比赛正在征集作品，奖金均已提前托管。</p></div>{user ? <CreateContestDialog onCreated={() => void query.refetch()} onPaymentRequired={setPaymentShortfall} /> : <Link to={routes.LoginRoute.to}><Button size="lg">登录后发布</Button></Link>}</div>
+    <div className="section-heading"><div><h2>比赛广场</h2><p>{query.isLoading ? "正在更新…" : `找到 ${contests.length} 个比赛`}</p></div><Link to={routes.TaskListRoute.to}>想看悬赏？</Link></div>
+    {query.isLoading ? <div className="market-empty">正在加载比赛…</div> : query.error ? <div className="market-empty">加载失败，请稍后重试。</div> : !contests.length ? <div className="market-empty"><strong>暂时没有可展示的比赛</strong></div> : <section className="task-grid">{contests.map((contest) => <ContestCard key={contest.id} contest={contest} currentUserId={user?.id} />)}</section>}
+    <RechargeRequiredDialog value={paymentShortfall} onOpenChange={(open) => { if (!open) setPaymentShortfall(null); }} />
   </main>;
 }
 
-function CreateContestCard({ onCreated }: { onCreated: () => void }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [result, setResult] = useState<any>(null);
-  const deadline = toLocalInput(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
-  async function submit(form: HTMLFormElement) {
-    setBusy(true); setError(""); setResult(null);
-    const values = new FormData(form);
-    try {
-      const contest: any = await createContest({
-        title: String(values.get("title")),
-        description: String(values.get("description")),
-        firstPrizeCents: Math.round(Number(values.get("firstPrize")) * 100),
-        secondPrizeCents: Math.round(Number(values.get("secondPrize")) * 100),
-        thirdPrizeCents: Math.round(Number(values.get("thirdPrize")) * 100),
-        submissionDeadline: new Date(String(values.get("submissionDeadline"))),
-      });
-      setResult(contest); form.reset(); onCreated();
-    } catch (error: any) { setError(error?.response?.data?.message ?? error?.message ?? "创建比赛失败"); }
-    finally { setBusy(false); }
-  }
-  return <Card><CardHeader><CardTitle>发布新比赛</CardTitle></CardHeader><CardContent><form className="grid gap-3 md:grid-cols-3" onSubmit={(event) => { event.preventDefault(); void submit(event.currentTarget); }}><Input className="md:col-span-2" name="title" placeholder="比赛标题" required minLength={3} /><label className="space-y-1 text-sm"><span className="text-muted-foreground">投稿截止时间</span><Input name="submissionDeadline" type="datetime-local" defaultValue={deadline} required /></label><Input name="firstPrize" type="number" min="0.01" step="0.01" placeholder="一等奖奖金（元）" required /><Input name="secondPrize" type="number" min="0.01" step="0.01" placeholder="二等奖奖金（元）" required /><Input name="thirdPrize" type="number" min="0.01" step="0.01" placeholder="三等奖奖金（元）" required /><textarea name="description" className="min-h-32 rounded-md border bg-transparent p-3 md:col-span-3" placeholder="比赛主题、投稿要求和评奖标准" required minLength={10} />{error && <p className="text-sm text-destructive md:col-span-3">{error}</p>}{result && <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900 md:col-span-3 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-100">{result.status === "PENDING_PAYMENT" ? <><strong>比赛已保存，但奖池余额不足。</strong><p className="mt-1">充值后可在比赛详情重新提交。</p></> : <><strong>比赛已直接发布。</strong><p className="mt-1">参赛者现在就可以投稿，无需后台预审。</p></>}<Link className="mt-2 inline-block font-semibold underline" to={routes.ContestDetailsRoute.build({ params: { id: result.id } })}>查看比赛</Link></div>}<Button className="md:col-span-3" disabled={busy}>{busy ? "发布中…" : "托管奖金并直接发布"}</Button></form></CardContent></Card>;
+function ContestCard({ contest, currentUserId }: { contest: any; currentUserId?: string }) {
+  const isOpen = contest.effectiveStatus === "OPEN";
+  return <Link className="task-card contest-card" to={routes.ContestDetailsRoute.build({ params: { id: contest.id } })}><div className="task-card-top"><span className={`state-pill ${isOpen ? "live" : ""}`}><i />{contestStatusLabel(contest.effectiveStatus)}</span><strong>{money(contest.totalPrizeCents)}</strong></div><div><span className="category-label">{formatPublicNo("contest", contest.publicNo)} · {contest.prizes.length} 个奖项</span><h3>{contest.title}</h3><p>{contest.description}</p></div><div className="contest-prizes">{contest.prizes.map((prize: any) => <span key={prize.id}><small>{prizeRankLabel(prize.rank)}</small><b>{money(prize.amountCents)}</b></span>)}</div><footer><div className="publisher-mini"><span>{(contest.publisher.username ?? "匿").slice(0, 1)}</span><div><b>{contest.publisher.username ?? "匿名发布者"}</b><small>{currentUserId === contest.publisherId ? "我发布的" : `${contest._count.entries} 份投稿`}</small></div></div><div className="deadline"><small>{isOpen ? "投稿截止" : "当前状态"}</small><b>{isOpen ? new Date(contest.submissionDeadline).toLocaleDateString("zh-CN", { month: "short", day: "numeric" }) : contestStatusLabel(contest.effectiveStatus)}</b></div></footer></Link>;
 }
 
-function toLocalInput(date: Date) {
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(0, 16);
+function CreateContestDialog({ onCreated, onPaymentRequired }: { onCreated: () => void; onPaymentRequired: (value: PaymentShortfall) => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const deadline = toLocalInput(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000));
+  async function submit(form: HTMLFormElement) {
+    setBusy(true); setError("");
+    const values = new FormData(form);
+    try {
+      const contest: any = await createContest({ title: String(values.get("title")), description: String(values.get("description")), firstPrizeCents: Math.round(Number(values.get("firstPrize")) * 100), secondPrizeCents: optionalCents(values.get("secondPrize")), thirdPrizeCents: optionalCents(values.get("thirdPrize")), submissionDeadline: new Date(String(values.get("submissionDeadline"))) });
+      setOpen(false); form.reset(); onCreated();
+      if (contest.status === "PENDING_PAYMENT" && contest.paymentShortfall) onPaymentRequired({ ...contest.paymentShortfall, itemId: contest.id, kind: "contest" });
+    } catch (exception: any) { setError(exception?.response?.data?.message ?? exception?.message ?? "创建比赛失败"); }
+    finally { setBusy(false); }
+  }
+  return <Dialog open={open} onOpenChange={setOpen}><DialogTrigger asChild><Button size="lg"><Plus size={18} />发布比赛</Button></DialogTrigger><DialogContent className="max-h-[92vh] max-w-2xl overflow-y-auto"><DialogHeader><DialogTitle>发布一个创意比赛</DialogTitle></DialogHeader><form className="create-form" onSubmit={(event) => { event.preventDefault(); void submit(event.currentTarget); }}><label>比赛标题<Input name="title" placeholder="例如：为新产品设计一句中文口号" required minLength={3} maxLength={120} /></label><label>比赛说明<textarea name="description" placeholder="说明主题、投稿要求和评选标准" required minLength={10} maxLength={20_000} /></label><div className="form-row"><label>一等奖（元）<Input name="firstPrize" type="number" min="0.01" step="0.01" required /></label><label>投稿截止<Input name="submissionDeadline" type="datetime-local" defaultValue={deadline} required /></label></div><div className="form-row"><label>二等奖（选填）<Input name="secondPrize" type="number" min="0.01" step="0.01" /></label><label>三等奖（选填）<Input name="thirdPrize" type="number" min="0.01" step="0.01" /></label></div><div className="escrow-summary"><Award /><div><strong>发布时托管全部奖池</strong><p>余额不足时会保存比赛并引导充值，不会丢失内容。</p></div></div>{error && <p className="form-error">{error}</p>}<Button className="w-full" size="lg" disabled={busy}><Trophy size={18} />{busy ? "发布中…" : "托管奖金并发布"}</Button></form></DialogContent></Dialog>;
 }
+
+function optionalCents(value: FormDataEntryValue | null) { const amount = Number(value); return amount > 0 ? Math.round(amount * 100) : undefined; }
+function toLocalInput(date: Date) { const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000); return local.toISOString().slice(0, 16); }
